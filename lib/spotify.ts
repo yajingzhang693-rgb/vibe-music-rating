@@ -173,11 +173,50 @@ export async function getSpotifyArtist(artistId: string) {
   return spotifyFetch<SpotifyArtist>(`/artists/${artistId}`);
 }
 
-export async function getSpotifyArtistAlbums(artistId: string) {
+function normalizeAlbumNameForDedup(name: string) {
+  return name
+    .toLowerCase()
+    .replace(/\[[^\]]*\]/g, "")
+    .replace(/\([^)]*\)/g, "")
+    .replace(/\s*-\s*(deluxe|expanded|remaster(ed)?|version.*)$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function dedupeArtistAlbums(albums: SpotifyAlbum[]) {
+  const uniqueByName = new Map<string, SpotifyAlbum>();
+  for (const album of albums) {
+    const key = normalizeAlbumNameForDedup(album.name);
+    const existing = uniqueByName.get(key);
+    if (!existing) {
+      uniqueByName.set(key, album);
+      continue;
+    }
+
+    // Prefer full albums, then newer release date, then higher track count.
+    const existingScore =
+      (existing.album_type === "album" ? 100 : 0) +
+      Number.parseInt(existing.release_date.replace(/-/g, ""), 10) / 100000000 +
+      existing.total_tracks / 1000;
+    const currentScore =
+      (album.album_type === "album" ? 100 : 0) +
+      Number.parseInt(album.release_date.replace(/-/g, ""), 10) / 100000000 +
+      album.total_tracks / 1000;
+    if (currentScore > existingScore) {
+      uniqueByName.set(key, album);
+    }
+  }
+  return [...uniqueByName.values()];
+}
+
+export async function getSpotifyArtistAlbums(artistId: string, limit = 20) {
   const data = await spotifyFetch<{ items: SpotifyAlbum[] }>(`/artists/${artistId}/albums`, {
-    market: "US"
+    market: "US",
+    include_groups: "album,single",
+    limit: String(limit)
   });
-  return data.items.filter((album) => album.album_type === "album" || album.album_type === "single");
+  const filtered = data.items.filter((album) => album.album_type === "album" || album.album_type === "single");
+  return dedupeArtistAlbums(filtered);
 }
 
 export async function getSpotifyAlbum(albumId: string) {

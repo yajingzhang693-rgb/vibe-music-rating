@@ -65,7 +65,7 @@ export default async function ArtistPage({ params }: Props) {
     albumsStaleAt = cachedAlbums.updatedAt;
   } else {
     try {
-      artistAlbums = await getSpotifyArtistAlbums(params.id);
+      artistAlbums = await getSpotifyArtistAlbums(params.id, 20);
       artistAlbums = sortAlbumsByDateDesc(artistAlbums);
       if (canPersistCache) {
         await writeCachedArtistAlbums(params.id, artistAlbums);
