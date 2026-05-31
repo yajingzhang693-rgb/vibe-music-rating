@@ -1,0 +1,83 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --album-theme-color: #7c3aed;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #09090c;
+  color: #f4f4f5;
+  font-family:
+    Inter,
+    "PingFang SC",
+    "Noto Sans SC",
+    system-ui,
+    -apple-system,
+    sans-serif;
+  min-height: 100%;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.vibe-glow-bg {
+  background:
+    radial-gradient(circle at 20% 20%, color-mix(in srgb, var(--album-theme-color), white 10%) 0%, transparent 35%),
+    radial-gradient(circle at 80% 10%, color-mix(in srgb, var(--album-theme-color), black 20%) 0%, transparent 30%),
+    radial-gradient(circle at 50% 90%, color-mix(in srgb, var(--album-theme-color), black 40%) 0%, transparent 35%),
+    #09090c;
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+/* Hide scrollbar while preserving scroll behavior (Chrome/Safari/Firefox/Edge). */
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Hide native number input spin buttons across browsers. */
+.no-spin::-webkit-outer-spin-button,
+.no-spin::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.no-spin[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+/* Subtle bottom glow animation for focused Main Score input. */
+.score-input-shell {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+  transition:
+    border-color 180ms ease,
+    box-shadow 220ms ease;
+}
+
+.score-input-shell:focus-within {
+  border-bottom-color: var(--album-theme-color);
+  box-shadow: 0 6px 14px -8px color-mix(in srgb, var(--album-theme-color), transparent 35%);
+}
