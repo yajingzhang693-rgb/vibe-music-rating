@@ -198,16 +198,25 @@ const PINNED_ALBUM_QUERIES = [
 ];
 
 export async function getSpotifyCuratedAlbums(limit = 8) {
-  const pinnedAlbums: SpotifyAlbum[] = [];
-  for (const query of PINNED_ALBUM_QUERIES) {
-    try {
+  const settled = await Promise.allSettled(
+    PINNED_ALBUM_QUERIES.map(async (query) => {
       const pinnedResults = await searchAlbums(query, 1);
       const album = pinnedResults[0];
-      if (album?.images.length) pinnedAlbums.push(album);
-    } catch (error) {
-      console.warn(`Pinned album fetch failed: ${query}`, error);
+      return album?.images.length ? album : null;
+    })
+  );
+
+  const pinnedAlbums: SpotifyAlbum[] = [];
+  settled.forEach((result, index) => {
+    if (result.status === "fulfilled" && result.value) {
+      pinnedAlbums.push(result.value);
+      return;
     }
-  }
+    if (result.status === "rejected") {
+      console.warn(`Pinned album fetch failed: ${PINNED_ALBUM_QUERIES[index]}`, result.reason);
+    }
+  });
+
   const unique = new Map<string, SpotifyAlbum>();
   for (const pinnedAlbum of pinnedAlbums) {
     unique.set(pinnedAlbum.id, pinnedAlbum);

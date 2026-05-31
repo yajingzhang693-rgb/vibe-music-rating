@@ -14,6 +14,7 @@ function sortAlbumsByDateDesc<T extends { release_date: string }>(albums: T[]) {
 }
 
 export default async function ArtistPage({ params }: Props) {
+  const canPersistCache = process.env.VERCEL !== "1";
   let artist: Awaited<ReturnType<typeof getSpotifyArtist>> | null = null;
   let artistAlbums: Awaited<ReturnType<typeof getSpotifyArtistAlbums>> = [];
   let artistError: string | null = null;
@@ -26,7 +27,9 @@ export default async function ArtistPage({ params }: Props) {
   } else {
     try {
       artist = await getSpotifyArtist(params.id);
-      await writeCachedArtistProfile(params.id, artist);
+      if (canPersistCache) {
+        await writeCachedArtistProfile(params.id, artist);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       if (message.includes("Spotify API error: 404")) {
@@ -64,7 +67,9 @@ export default async function ArtistPage({ params }: Props) {
     try {
       artistAlbums = await getSpotifyArtistAlbums(params.id);
       artistAlbums = sortAlbumsByDateDesc(artistAlbums);
-      await writeCachedArtistAlbums(params.id, artistAlbums);
+      if (canPersistCache) {
+        await writeCachedArtistAlbums(params.id, artistAlbums);
+      }
     } catch (error) {
       albumsError = error instanceof Error ? error.message : "Unknown error";
       // Fallback #1: search albums by artist name.
@@ -73,7 +78,9 @@ export default async function ArtistPage({ params }: Props) {
         const matched = searched.filter((album) => album.artists.some((a) => a.id === params.id));
         if (matched.length > 0) {
           artistAlbums = sortAlbumsByDateDesc(matched);
-          await writeCachedArtistAlbums(params.id, artistAlbums);
+          if (canPersistCache) {
+            await writeCachedArtistAlbums(params.id, artistAlbums);
+          }
           albumsError = null;
         }
       } catch {
