@@ -210,15 +210,26 @@ function dedupeArtistAlbums(albums: SpotifyAlbum[]) {
 }
 
 export async function getSpotifyArtistAlbums(artistId: string) {
-  // Spotify artists/{id}/albums requires limit to be a valid integer (1-50).
-  const rawLimit = 20;
-  const safeLimit = Number.isInteger(rawLimit) ? Math.min(50, Math.max(1, rawLimit)) : 20;
-
-  const data = await spotifyFetch<{ items: SpotifyAlbum[] }>(`/artists/${artistId}/albums`, {
-    market: "US",
-    include_groups: "album,single",
-    limit: String(safeLimit)
-  });
+  // Spotify default page size is 20; we keep explicit limit first, and fallback
+  // to no-limit query when Spotify returns "Invalid limit" in production.
+  const safeLimit = 20;
+  let data: { items: SpotifyAlbum[] };
+  try {
+    data = await spotifyFetch<{ items: SpotifyAlbum[] }>(`/artists/${artistId}/albums`, {
+      market: "US",
+      include_groups: "album,single",
+      limit: String(safeLimit)
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (!message.includes("Invalid limit")) {
+      throw error;
+    }
+    data = await spotifyFetch<{ items: SpotifyAlbum[] }>(`/artists/${artistId}/albums`, {
+      market: "US",
+      include_groups: "album,single"
+    });
+  }
   const filtered = data.items.filter((album) => album.album_type === "album" || album.album_type === "single");
   return dedupeArtistAlbums(filtered);
 }
