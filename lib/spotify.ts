@@ -1,6 +1,5 @@
 const SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token";
 const SPOTIFY_API_BASE = "https://api.spotify.com/v1";
-const SPOTIFY_RESPONSE_CACHE_TTL_MS = 10 * 60 * 1000;
 
 type TokenCache = {
   accessToken: string;
@@ -8,7 +7,6 @@ type TokenCache = {
 };
 
 let tokenCache: TokenCache | null = null;
-const responseCache = new Map<string, { expiresAt: number; data: unknown }>();
 
 type SpotifyImage = {
   url: string;
@@ -107,15 +105,10 @@ async function spotifyFetch<T>(path: string, query?: Record<string, string>) {
       url.searchParams.set(key, value);
     }
   }
-  const cacheKey = url.toString();
-  const now = Date.now();
-  const cached = responseCache.get(cacheKey);
-  if (cached && cached.expiresAt > now) {
-    return cached.data as T;
-  }
+  const requestUrl = url.toString();
 
   async function requestOnce() {
-    return fetch(cacheKey, {
+    return fetch(requestUrl, {
       headers: {
         Authorization: `Bearer ${token}`
       },
@@ -142,12 +135,7 @@ async function spotifyFetch<T>(path: string, query?: Record<string, string>) {
     throw new Error(`Spotify API error: ${response.status} ${errorText}`);
   }
 
-  const data = (await response.json()) as T;
-  responseCache.set(cacheKey, {
-    expiresAt: now + SPOTIFY_RESPONSE_CACHE_TTL_MS,
-    data
-  });
-  return data;
+  return (await response.json()) as T;
 }
 
 export async function searchArtists(query: string, limit = 5) {
@@ -210,28 +198,13 @@ function dedupeArtistAlbums(albums: SpotifyAlbum[]) {
 }
 
 export async function getSpotifyArtistAlbums(artistId: string) {
-  // Spotify default page size is 20; we keep explicit limit first, and fallback
-  // to no-limit query when Spotify returns "Invalid limit" in production.
-  const safeLimit = 20;
-  let data: { items: SpotifyAlbum[] };
-  try {
-    data = await spotifyFetch<{ items: SpotifyAlbum[] }>(`/artists/${artistId}/albums`, {
-      market: "US",
-      include_groups: "album,single",
-      limit: String(safeLimit)
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-    if (!message.includes("Invalid limit")) {
-      throw error;
-    }
-    data = await spotifyFetch<{ items: SpotifyAlbum[] }>(`/artists/${artistId}/albums`, {
-      market: "US",
-      include_groups: "album,single"
-    });
-  }
+  const data = await spotifyFetch<{ items: SpotifyAlbum[] }>(`/artists/${artistId}/albums`, {
+    market: "US",
+    include_groups: "album,single",
+    limit: "50"
+  });
   const filtered = data.items.filter((album) => album.album_type === "album" || album.album_type === "single");
-  return dedupeArtistAlbums(filtered);
+  return dedupeArtistAlbums(filtered).slice(0, 20);
 }
 
 export async function getSpotifyAlbum(albumId: string) {
