@@ -209,11 +209,15 @@ function dedupeArtistAlbums(albums: SpotifyAlbum[]) {
   return [...uniqueByName.values()];
 }
 
-export async function getSpotifyArtistAlbums(artistId: string, limit = 20) {
+export async function getSpotifyArtistAlbums(artistId: string) {
+  // Spotify artists/{id}/albums requires limit to be a valid integer (1-50).
+  const rawLimit = 20;
+  const safeLimit = Number.isInteger(rawLimit) ? Math.min(50, Math.max(1, rawLimit)) : 20;
+
   const data = await spotifyFetch<{ items: SpotifyAlbum[] }>(`/artists/${artistId}/albums`, {
     market: "US",
     include_groups: "album,single",
-    limit: String(limit)
+    limit: String(safeLimit)
   });
   const filtered = data.items.filter((album) => album.album_type === "album" || album.album_type === "single");
   return dedupeArtistAlbums(filtered);
