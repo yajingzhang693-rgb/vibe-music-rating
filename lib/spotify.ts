@@ -198,11 +198,29 @@ function dedupeArtistAlbums(albums: SpotifyAlbum[]) {
 }
 
 export async function getSpotifyArtistAlbums(artistId: string) {
-  const data = await spotifyFetch<{ items: SpotifyAlbum[] }>(`/artists/${artistId}/albums`, {
-    market: "US",
-    include_groups: "album,single",
-    limit: "50"
+  const token = await getSpotifyAccessToken();
+  const params = new URLSearchParams();
+  params.set("limit", "20");
+  params.set("include_groups", "album,single");
+  params.set("market", "US");
+
+  const url = new URL(`${SPOTIFY_API_BASE}/artists/${artistId}/albums`);
+  url.search = params.toString();
+  console.log("Fetching Spotify URL:", url.toString());
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      Authorization: `Bearer ${token}`
+    },
+    next: { revalidate: 120 }
   });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Spotify API error: ${response.status} ${errorText}`);
+  }
+
+  const data = (await response.json()) as { items: SpotifyAlbum[] };
   const filtered = data.items.filter((album) => album.album_type === "album" || album.album_type === "single");
   return dedupeArtistAlbums(filtered).slice(0, 20);
 }
