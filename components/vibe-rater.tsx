@@ -20,7 +20,6 @@ type RateAlbum = {
 
 type Props = {
   album: RateAlbum;
-  initialAverageScore?: number | null;
 };
 
 type VibeValues = {
@@ -120,7 +119,7 @@ function blendHex(hex: string, target: "white" | "black", amount: number) {
   return `rgb(${nr}, ${ng}, ${nb})`;
 }
 
-export function VibeRater({ album, initialAverageScore = null }: Props) {
+export function VibeRater({ album }: Props) {
   const [mainScore, setMainScore] = useState(8.0);
   const [reviewText, setReviewText] = useState("");
   const [vibes, setVibes] = useState<VibeValues>({
@@ -133,8 +132,6 @@ export function VibeRater({ album, initialAverageScore = null }: Props) {
   const [trackMoodMap, setTrackMoodMap] = useState<Record<string, TrackMood | undefined>>({});
   const [hoverTriggerTrackKey, setHoverTriggerTrackKey] = useState<string | null>(null);
   const [openTrackPickerKey, setOpenTrackPickerKey] = useState<string | null>(null);
-  const [deviceId, setDeviceId] = useState<string | null>(null);
-  const [communityAverageScore, setCommunityAverageScore] = useState<number | null>(initialAverageScore);
   const cardRef = useRef<HTMLDivElement>(null);
   const safeCoverUrl = album.coverUrl.includes("i.scdn.co")
     ? `/api/spotify-image?url=${encodeURIComponent(album.coverUrl)}`
@@ -160,11 +157,10 @@ export function VibeRater({ album, initialAverageScore = null }: Props) {
     };
   }, [album.coverUrl, safeCoverUrl]);
 
-  const computedScore = useMemo(() => {
+  const finalScore = useMemo(() => {
     const fine = (vibes.production + vibes.songwriting) / 20;
     return Number(((mainScore * 0.7 + fine * 0.3) * 1).toFixed(1));
   }, [mainScore, vibes]);
-  const finalScore = communityAverageScore ?? computedScore;
 
   const scoreTone = useMemo(() => {
     const luminance = getLuminance(themeColor);
@@ -197,69 +193,6 @@ export function VibeRater({ album, initialAverageScore = null }: Props) {
       [trackKey]: mood
     }));
   }
-
-  useEffect(() => {
-    const key = "vibe_device_id";
-    const cached = localStorage.getItem(key);
-    if (cached) {
-      setDeviceId(cached);
-      return;
-    }
-    const generated = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `dev-${Date.now()}`;
-    localStorage.setItem(key, generated);
-    setDeviceId(generated);
-  }, []);
-
-  async function refreshAverageScore() {
-    try {
-      const res = await fetch(`/api/ratings/${album.id}`);
-      if (!res.ok) return;
-      const data = (await res.json()) as { average?: number | null };
-      if (typeof data.average === "number") {
-        setCommunityAverageScore(data.average);
-      }
-    } catch {
-      // Keep current score on network failure.
-    }
-  }
-
-  useEffect(() => {
-    refreshAverageScore();
-  }, [album.id]);
-
-  useEffect(() => {
-    if (!deviceId) return;
-    const timer = window.setTimeout(async () => {
-      try {
-        await fetch("/api/ratings", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            album_id: album.id,
-            main_score: computedScore,
-            production_score: vibes.production,
-            writing_score: vibes.songwriting,
-            comment: reviewText,
-            device_id: deviceId,
-            album_name: album.title,
-            cover_url: album.coverUrl || null,
-            artist_name: album.artistName,
-            release_date: album.releaseDate || null,
-            artists: album.artistName
-              .split(",")
-              .map((name) => name.trim())
-              .filter(Boolean)
-              .map((name) => ({ id: "", name })),
-            tracks: album.tracks
-          })
-        });
-        await refreshAverageScore();
-      } catch {
-        // Silent failure: do not block interaction.
-      }
-    }, 700);
-    return () => window.clearTimeout(timer);
-  }, [album.id, computedScore, deviceId, reviewText, vibes.production, vibes.songwriting]);
 
   async function exportCard() {
     if (!cardRef.current) return;

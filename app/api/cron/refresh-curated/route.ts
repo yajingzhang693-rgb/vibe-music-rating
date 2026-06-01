@@ -1,12 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { readCuratedSnapshot, fetchCuratedSnapshotLightweight } from "@/lib/curated-cache";
+import { readCuratedSnapshot, refreshCuratedSnapshot } from "@/lib/curated-cache";
 
 function isAuthorized(request: NextRequest) {
-  // Public read mode for homepage fallback fetch.
-  if (request.nextUrl.searchParams.get("public") === "1") {
-    return true;
-  }
-
   const configuredSecret = process.env.CRON_SECRET;
   if (!configuredSecret) {
     // In local/dev environments, allow invocation when secret is not configured yet.
@@ -26,20 +21,19 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const snapshot = await fetchCuratedSnapshotLightweight();
+    const snapshot = await refreshCuratedSnapshot();
     return NextResponse.json({
       ok: true,
       refreshedAt: snapshot.updatedAt,
-      count: snapshot.albums.length,
-      albums: snapshot.albums
+      count: snapshot.albums.length
     });
   } catch (error) {
+    console.error("Curated refresh failed:", error);
     const stale = await readCuratedSnapshot();
     return NextResponse.json(
       {
         ok: false,
         error: error instanceof Error ? error.message : "Unknown refresh error",
-        albums: stale?.albums ?? [],
         staleUpdatedAt: stale?.updatedAt ?? null,
         staleCount: stale?.albums.length ?? 0
       },

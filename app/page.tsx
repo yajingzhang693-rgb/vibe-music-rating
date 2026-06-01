@@ -1,21 +1,10 @@
 import { AlbumCard } from "@/components/album-card";
 import { SearchCommand } from "@/components/search-command";
-import { getHomepageAlbumsCacheFirst } from "@/lib/supabase-cache";
-
-export const revalidate = 3600;
+import { readCuratedSnapshot } from "@/lib/curated-cache";
 
 export default async function HomePage() {
-  let curated: Array<{ id: string; title: string; coverUrl: string; artistName: string }> = [];
-  let lastUpdated: string | null = null;
-  let loadFailed = false;
-
-  try {
-    const snapshot = await getHomepageAlbumsCacheFirst();
-    curated = snapshot.albums;
-    lastUpdated = snapshot.updatedAt;
-  } catch {
-    loadFailed = true;
-  }
+  const snapshot = await readCuratedSnapshot();
+  const curated = snapshot?.albums ?? [];
 
   return (
     <main className="mx-auto min-h-screen w-[min(1200px,92vw)] py-10">
@@ -41,24 +30,14 @@ export default async function HomePage() {
               <AlbumCard key={album.id} album={album} />
             ))}
           </div>
-        ) : loadFailed ? (
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-            {Array.from({ length: 8 }).map((_, idx) => (
-              <div
-                key={idx}
-                className="glass h-44 animate-pulse rounded-2xl border border-white/10 bg-white/[0.04]"
-                aria-hidden="true"
-              />
-            ))}
-          </div>
         ) : (
           <div className="glass rounded-xl px-4 py-5 text-sm text-zinc-300">
-            编辑精选暂未就绪。请稍后重试。
+            编辑精选暂未就绪。请先触发一次缓存刷新（Cron 或手动访问刷新接口）。
           </div>
         )}
-        {lastUpdated ? (
+        {snapshot ? (
           <p className="mt-3 text-xs text-zinc-500">
-            Last updated: {new Date(lastUpdated).toLocaleString()}
+            Last updated: {new Date(snapshot.updatedAt).toLocaleString()}
           </p>
         ) : null}
       </section>

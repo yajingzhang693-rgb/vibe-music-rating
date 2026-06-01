@@ -1,5 +1,6 @@
 const SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token";
 const SPOTIFY_API_BASE = "https://api.spotify.com/v1";
+const SPOTIFY_RESPONSE_CACHE_TTL_MS = 10 * 60 * 1000;
 
 type TokenCache = {
   accessToken: string;
@@ -7,6 +8,7 @@ type TokenCache = {
 };
 
 let tokenCache: TokenCache | null = null;
+const responseCache = new Map<string, { expiresAt: number; data: unknown }>();
 
 type SpotifyImage = {
   url: string;
@@ -71,23 +73,17 @@ export async function getSpotifyAccessToken() {
   const clientSecret = getRequiredEnv("SPOTIFY_CLIENT_SECRET");
   const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
 
-  let response: Response;
-  try {
-    response = await fetch(SPOTIFY_TOKEN_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${auth}`,
-        "Content-Type": "application/x-www-form-urlencoded"
-      },
-      body: new URLSearchParams({
-        grant_type: "client_credentials"
-      }),
-      cache: "no-store"
-    });
-  } catch (error) {
-    console.error("Spotify fetch failed URL:", SPOTIFY_TOKEN_URL);
-    throw error;
-  }
+  const response = await fetch(SPOTIFY_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${auth}`,
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: new URLSearchParams({
+      grant_type: "client_credentials"
+    }),
+    cache: "no-store"
+  });
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -111,21 +107,21 @@ async function spotifyFetch<T>(path: string, query?: Record<string, string>) {
       url.searchParams.set(key, value);
     }
   }
-  const requestUrl = url.toString();
+  const cacheKey = url.toString();
+  const now = Date.now();
+  const cached = responseCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.data as T;
+  }
 
   async function requestOnce() {
-    try {
-      return await fetch(requestUrl, {
-        headers: {
-          Authorization: `Bearer ${token}`
-        },
-        // Keep data reasonably fresh while reducing API pressure.
-        next: { revalidate: 120 }
-      });
-    } catch (error) {
-      console.error("Spotify fetch failed URL:", requestUrl);
-      throw error;
-    }
+    return fetch(cacheKey, {
+      headers: {
+        Authorization: `Bearer ${token}`
+      },
+      // Keep data reasonably fresh while reducing API pressure.
+      next: { revalidate: 120 }
+    });
   }
 
   let response = await requestOnce();
@@ -143,10 +139,16 @@ async function spotifyFetch<T>(path: string, query?: Record<string, string>) {
 
   if (!response.ok) {
     const errorText = await response.text();
+    console.error("Spotify fetch failed URL:", cacheKey);
     throw new Error(`Spotify API error: ${response.status} ${errorText}`);
   }
 
-  return (await response.json()) as T;
+  const data = (await response.json()) as T;
+  responseCache.set(cacheKey, {
+    expiresAt: now + SPOTIFY_RESPONSE_CACHE_TTL_MS,
+    data
+  });
+  return data;
 }
 
 export async function searchArtists(query: string, limit = 5) {
@@ -172,74 +174,19 @@ export async function getSpotifyArtist(artistId: string) {
   return spotifyFetch<SpotifyArtist>(`/artists/${artistId}`);
 }
 
-function normalizeAlbumNameForDedup(name: string) {
-  return name
-    .toLowerCase()
-    .replace(/\[[^\]]*\]/g, "")
-    .replace(/\([^)]*\)/g, "")
-    .replace(/\s*-\s*(deluxe|expanded|remaster(ed)?|version.*)$/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function dedupeArtistAlbums(albums: SpotifyAlbum[]) {
-  const uniqueByName = new Map<string, SpotifyAlbum>();
-  for (const album of albums) {
-    const key = normalizeAlbumNameForDedup(album.name);
-    const existing = uniqueByName.get(key);
-    if (!existing) {
-      uniqueByName.set(key, album);
-      continue;
-    }
-
-    // Prefer full albums, then newer release date, then higher track count.
-    const existingScore =
-      (existing.album_type === "album" ? 100 : 0) +
-      Number.parseInt(existing.release_date.replace(/-/g, ""), 10) / 100000000 +
-      existing.total_tracks / 1000;
-    const currentScore =
-      (album.album_type === "album" ? 100 : 0) +
-      Number.parseInt(album.release_date.replace(/-/g, ""), 10) / 100000000 +
-      album.total_tracks / 1000;
-    if (currentScore > existingScore) {
-      uniqueByName.set(key, album);
-    }
-  }
-  return [...uniqueByName.values()];
-}
-
 export async function getSpotifyArtistAlbums(artistId: string) {
-  const token = await getSpotifyAccessToken();
-  const params = new URLSearchParams();
-  params.set("limit", "20");
-  params.set("include_groups", "album,single");
-  params.set("market", "US");
-
-  const url = new URL(`${SPOTIFY_API_BASE}/artists/${artistId}/albums`);
-  url.search = params.toString();
-  console.log("Fetching Spotify URL:", url.toString());
-
-  let response: Response;
-  try {
-    response = await fetch(url.toString(), {
-      headers: {
-        Authorization: `Bearer ${token}`
-      },
-      next: { revalidate: 120 }
-    });
-  } catch (error) {
-    console.error("Spotify fetch failed URL:", url.toString());
-    throw error;
+  const query = {
+    market: "US",
+    include_groups: "album,single",
+    limit: "20"
+  };
+  const requestUrl = new URL(`${SPOTIFY_API_BASE}/artists/${artistId}/albums`);
+  for (const [key, value] of Object.entries(query)) {
+    requestUrl.searchParams.set(key, value);
   }
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Spotify API error: ${response.status} ${errorText}`);
-  }
-
-  const data = (await response.json()) as { items: SpotifyAlbum[] };
-  const filtered = data.items.filter((album) => album.album_type === "album" || album.album_type === "single");
-  return dedupeArtistAlbums(filtered).slice(0, 20);
+  console.log("Fetching Spotify URL:", requestUrl.toString());
+  const data = await spotifyFetch<{ items: SpotifyAlbum[] }>(`/artists/${artistId}/albums`, query);
+  return data.items.filter((album) => album.album_type === "album" || album.album_type === "single");
 }
 
 export async function getSpotifyAlbum(albumId: string) {
@@ -259,36 +206,21 @@ const PINNED_ALBUM_QUERIES = [
   "album:Imaginal Disk artist:Magdalena Bay"
 ];
 
+export function hasSpotifyCredentials() {
+  return Boolean(process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET);
+}
+
 export async function getSpotifyCuratedAlbums(limit = 8) {
-  const settled = await Promise.allSettled(
-    PINNED_ALBUM_QUERIES.map(async (query) => {
+  const pinnedAlbums: SpotifyAlbum[] = [];
+  for (const query of PINNED_ALBUM_QUERIES) {
+    try {
       const pinnedResults = await searchAlbums(query, 1);
       const album = pinnedResults[0];
-      return album?.images.length ? album : null;
-    })
-  );
-
-  const pinnedAlbums: SpotifyAlbum[] = [];
-  const failures: string[] = [];
-  settled.forEach((result, index) => {
-    if (result.status === "fulfilled" && result.value) {
-      pinnedAlbums.push(result.value);
-      return;
+      if (album?.images.length) pinnedAlbums.push(album);
+    } catch (error) {
+      console.warn(`Pinned album fetch failed: ${query}`, error);
     }
-    if (result.status === "rejected") {
-      const reason =
-        result.reason instanceof Error ? result.reason.message : typeof result.reason === "string" ? result.reason : "Unknown error";
-      failures.push(`${PINNED_ALBUM_QUERIES[index]} => ${reason}`);
-      console.warn(`Pinned album fetch failed: ${PINNED_ALBUM_QUERIES[index]}`, result.reason);
-    }
-  });
-
-  if (pinnedAlbums.length === 0) {
-    throw new Error(
-      `Failed to fetch curated albums from Spotify. ${failures.length > 0 ? `Details: ${failures.join(" | ")}` : ""}`
-    );
   }
-
   const unique = new Map<string, SpotifyAlbum>();
   for (const pinnedAlbum of pinnedAlbums) {
     unique.set(pinnedAlbum.id, pinnedAlbum);

@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { searchAlbums } from "@/lib/spotify";
+import { getSpotifyArtist, getSpotifyArtistAlbums, searchAlbums } from "@/lib/spotify";
 import { ArtistAlbumRow } from "@/components/artist-album-row";
-import { getArtistPageCacheFirst } from "@/lib/supabase-cache";
+import { readCachedArtistAlbums, writeCachedArtistAlbums } from "@/lib/artist-cache";
+import { readCachedArtistProfile, writeCachedArtistProfile } from "@/lib/artist-profile-cache";
 
 type Props = {
   params: { id: string };
@@ -13,23 +14,26 @@ function sortAlbumsByDateDesc<T extends { release_date: string }>(albums: T[]) {
 }
 
 export default async function ArtistPage({ params }: Props) {
-  let artist: Awaited<ReturnType<typeof getArtistPageCacheFirst>>["artist"] | null = null;
-  let artistAlbums: Awaited<ReturnType<typeof getArtistPageCacheFirst>>["albums"] = [];
+  let artist: Awaited<ReturnType<typeof getSpotifyArtist>> | null = null;
+  let artistAlbums: Awaited<ReturnType<typeof getSpotifyArtistAlbums>> = [];
   let artistError: string | null = null;
   let albumsError: string | null = null;
   let albumsStaleAt: string | null = null;
 
-  try {
-    const data = await getArtistPageCacheFirst(params.id);
-    artist = data.artist;
-    artistAlbums = sortAlbumsByDateDesc(data.albums);
-    albumsStaleAt = data.staleUpdatedAt;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    if (message.includes("Spotify API error: 404")) {
-      return notFound();
+  const cachedArtist = await readCachedArtistProfile(params.id);
+  if (cachedArtist) {
+    artist = cachedArtist.artist;
+  } else {
+    try {
+      artist = await getSpotifyArtist(params.id);
+      await writeCachedArtistProfile(params.id, artist);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      if (message.includes("Spotify API error: 404")) {
+        return notFound();
+      }
+      artistError = message;
     }
-    artistError = message;
   }
 
   if (!artist) {
@@ -52,17 +56,39 @@ export default async function ArtistPage({ params }: Props) {
     );
   }
 
-  if (!artistAlbums.length) {
+  const cachedAlbums = await readCachedArtistAlbums(params.id);
+  if (cachedAlbums) {
+    artistAlbums = sortAlbumsByDateDesc(cachedAlbums.albums);
+    albumsStaleAt = cachedAlbums.updatedAt;
+  } else {
     try {
-      const searched = await searchAlbums(`artist:${artist.name}`, 30);
-      const matched = searched.filter((album) => album.artists.some((a) => a.id === params.id));
-      if (matched.length > 0) {
-        artistAlbums = sortAlbumsByDateDesc(matched);
-      } else {
-        albumsError = "No albums found";
-      }
+      artistAlbums = await getSpotifyArtistAlbums(params.id);
+      artistAlbums = sortAlbumsByDateDesc(artistAlbums);
+      await writeCachedArtistAlbums(params.id, artistAlbums);
     } catch (error) {
       albumsError = error instanceof Error ? error.message : "Unknown error";
+      // Fallback #1: search albums by artist name.
+      try {
+        const searched = await searchAlbums(`artist:${artist.name}`, 16);
+        const matched = searched.filter((album) => album.artists.some((a) => a.id === params.id));
+        if (matched.length > 0) {
+          artistAlbums = sortAlbumsByDateDesc(matched);
+          await writeCachedArtistAlbums(params.id, artistAlbums);
+          albumsError = null;
+        }
+      } catch {
+        // Continue to next fallback.
+      }
+
+      // Fallback #2: local cached albums (if any landed mid-request).
+      if (albumsError) {
+        const cached = await readCachedArtistAlbums(params.id);
+        if (cached) {
+          artistAlbums = sortAlbumsByDateDesc(cached.albums);
+          albumsStaleAt = cached.updatedAt;
+          albumsError = null;
+        }
+      }
     }
   }
 
@@ -89,7 +115,7 @@ export default async function ArtistPage({ params }: Props) {
       </section>
 
       <section className="px-6 py-8 md:px-10">
-        <h2 className="mb-5 text-base font-semibold uppercase tracking-[0.16em] text-zinc-300">Albums</h2>
+        <h2 className="mb-5 text-sm uppercase tracking-[0.16em] text-zinc-400">Albums</h2>
         {albumsError ? (
           <div className="glass rounded-xl px-4 py-4 text-sm text-zinc-300">
             专辑列表暂时加载失败，请稍后重试。

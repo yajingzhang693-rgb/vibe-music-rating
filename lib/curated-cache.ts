@@ -20,7 +20,6 @@ export type CuratedSnapshot = {
 const CACHE_DIR = path.join(process.cwd(), ".cache");
 const CACHE_FILE = path.join(CACHE_DIR, "curated-albums.json");
 const MEMORY_CACHE_KEY = "__vibe_curated_snapshot__";
-const IS_VERCEL = process.env.VERCEL === "1";
 
 function getMemorySnapshot() {
   return (globalThis as Record<string, unknown>)[MEMORY_CACHE_KEY] as CuratedSnapshot | undefined;
@@ -50,23 +49,9 @@ function normalizeSnapshot(input: unknown): CuratedSnapshot | null {
   };
 }
 
-function toCuratedSnapshot(albums: Awaited<ReturnType<typeof getSpotifyCuratedAlbums>>): CuratedSnapshot {
-  const mapped: CuratedAlbumCard[] = albums.map((album) => ({
-    id: album.id,
-    title: album.name,
-    coverUrl: album.images[0]?.url ?? "",
-    artistName: album.artists.map((artist) => artist.name).join(", ")
-  }));
-  return {
-    albums: mapped.filter((album) => Boolean(album.coverUrl)).slice(0, 8),
-    updatedAt: new Date().toISOString()
-  };
-}
-
 export async function readCuratedSnapshot() {
   const inMemory = getMemorySnapshot();
   if (inMemory) return inMemory;
-  if (IS_VERCEL) return null;
 
   try {
     const raw = await fs.readFile(CACHE_FILE, "utf-8");
@@ -83,22 +68,23 @@ export async function readCuratedSnapshot() {
 }
 
 export async function writeCuratedSnapshot(snapshot: CuratedSnapshot) {
-  if (!IS_VERCEL) {
-    await fs.mkdir(CACHE_DIR, { recursive: true });
-    await fs.writeFile(CACHE_FILE, JSON.stringify(snapshot, null, 2), "utf-8");
-  }
+  await fs.mkdir(CACHE_DIR, { recursive: true });
+  await fs.writeFile(CACHE_FILE, JSON.stringify(snapshot, null, 2), "utf-8");
   setMemorySnapshot(snapshot);
 }
 
 export async function refreshCuratedSnapshot() {
   const albums = await getSpotifyCuratedAlbums(8);
-  const snapshot = toCuratedSnapshot(albums);
-
-  if (IS_VERCEL) {
-    // Serverless runtime should avoid heavy prewarm and file writes.
-    setMemorySnapshot(snapshot);
-    return snapshot;
-  }
+  const mapped: CuratedAlbumCard[] = albums.map((album) => ({
+    id: album.id,
+    title: album.name,
+    coverUrl: album.images[0]?.url ?? "",
+    artistName: album.artists.map((artist) => artist.name).join(", ")
+  }));
+  const snapshot: CuratedSnapshot = {
+    albums: mapped.filter((album) => Boolean(album.coverUrl)).slice(0, 8),
+    updatedAt: new Date().toISOString()
+  };
 
   // Warm the rate page cache so opening a curated album is fast.
   const warmedArtistIds = new Set<string>();
@@ -132,12 +118,5 @@ export async function refreshCuratedSnapshot() {
   }
 
   await writeCuratedSnapshot(snapshot);
-  return snapshot;
-}
-
-export async function fetchCuratedSnapshotLightweight() {
-  const albums = await getSpotifyCuratedAlbums(8);
-  const snapshot = toCuratedSnapshot(albums);
-  setMemorySnapshot(snapshot);
   return snapshot;
 }
