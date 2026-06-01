@@ -1,45 +1,20 @@
 import { AlbumCard } from "@/components/album-card";
 import { SearchCommand } from "@/components/search-command";
-import { readCuratedSnapshot } from "@/lib/curated-cache";
-import { headers } from "next/headers";
+import { getHomepageAlbumsCacheFirst } from "@/lib/supabase-cache";
 
-type HomeCuratedPayload = {
-  ok: boolean;
-  refreshedAt?: string;
-  albums?: Array<{
-    id: string;
-    title: string;
-    coverUrl: string;
-    artistName: string;
-  }>;
-};
+export const revalidate = 3600;
 
 export default async function HomePage() {
-  const snapshot = await readCuratedSnapshot();
-  let curated = snapshot?.albums ?? [];
-  let lastUpdated = snapshot?.updatedAt ?? null;
+  let curated: Array<{ id: string; title: string; coverUrl: string; artistName: string }> = [];
+  let lastUpdated: string | null = null;
   let loadFailed = false;
 
-  if (!snapshot) {
-    try {
-      const h = headers();
-      const host = h.get("host");
-      if (!host) {
-        throw new Error("Missing host header");
-      }
-      const protocol = host.includes("localhost") ? "http" : "https";
-      const response = await fetch(`${protocol}://${host}/api/cron/refresh-curated?public=1`, {
-        next: { revalidate: 3600 }
-      });
-      if (!response.ok) {
-        throw new Error(`Curated endpoint failed: ${response.status}`);
-      }
-      const payload = (await response.json()) as HomeCuratedPayload;
-      curated = Array.isArray(payload.albums) ? payload.albums : [];
-      lastUpdated = payload.refreshedAt ?? null;
-    } catch {
-      loadFailed = true;
-    }
+  try {
+    const snapshot = await getHomepageAlbumsCacheFirst();
+    curated = snapshot.albums;
+    lastUpdated = snapshot.updatedAt;
+  } catch {
+    loadFailed = true;
   }
 
   return (
@@ -78,7 +53,7 @@ export default async function HomePage() {
           </div>
         ) : (
           <div className="glass rounded-xl px-4 py-5 text-sm text-zinc-300">
-            编辑精选暂未就绪。请先触发一次缓存刷新（Cron 或手动访问刷新接口）。
+            编辑精选暂未就绪。请稍后重试。
           </div>
         )}
         {lastUpdated ? (

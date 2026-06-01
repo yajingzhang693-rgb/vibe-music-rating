@@ -71,17 +71,23 @@ export async function getSpotifyAccessToken() {
   const clientSecret = getRequiredEnv("SPOTIFY_CLIENT_SECRET");
   const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
 
-  const response = await fetch(SPOTIFY_TOKEN_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${auth}`,
-      "Content-Type": "application/x-www-form-urlencoded"
-    },
-    body: new URLSearchParams({
-      grant_type: "client_credentials"
-    }),
-    cache: "no-store"
-  });
+  let response: Response;
+  try {
+    response = await fetch(SPOTIFY_TOKEN_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${auth}`,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({
+        grant_type: "client_credentials"
+      }),
+      cache: "no-store"
+    });
+  } catch (error) {
+    console.error("Spotify fetch failed URL:", SPOTIFY_TOKEN_URL);
+    throw error;
+  }
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -108,13 +114,18 @@ async function spotifyFetch<T>(path: string, query?: Record<string, string>) {
   const requestUrl = url.toString();
 
   async function requestOnce() {
-    return fetch(requestUrl, {
-      headers: {
-        Authorization: `Bearer ${token}`
-      },
-      // Keep data reasonably fresh while reducing API pressure.
-      next: { revalidate: 120 }
-    });
+    try {
+      return await fetch(requestUrl, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        },
+        // Keep data reasonably fresh while reducing API pressure.
+        next: { revalidate: 120 }
+      });
+    } catch (error) {
+      console.error("Spotify fetch failed URL:", requestUrl);
+      throw error;
+    }
   }
 
   let response = await requestOnce();
@@ -208,12 +219,18 @@ export async function getSpotifyArtistAlbums(artistId: string) {
   url.search = params.toString();
   console.log("Fetching Spotify URL:", url.toString());
 
-  const response = await fetch(url.toString(), {
-    headers: {
-      Authorization: `Bearer ${token}`
-    },
-    next: { revalidate: 120 }
-  });
+  let response: Response;
+  try {
+    response = await fetch(url.toString(), {
+      headers: {
+        Authorization: `Bearer ${token}`
+      },
+      next: { revalidate: 120 }
+    });
+  } catch (error) {
+    console.error("Spotify fetch failed URL:", url.toString());
+    throw error;
+  }
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -252,15 +269,25 @@ export async function getSpotifyCuratedAlbums(limit = 8) {
   );
 
   const pinnedAlbums: SpotifyAlbum[] = [];
+  const failures: string[] = [];
   settled.forEach((result, index) => {
     if (result.status === "fulfilled" && result.value) {
       pinnedAlbums.push(result.value);
       return;
     }
     if (result.status === "rejected") {
+      const reason =
+        result.reason instanceof Error ? result.reason.message : typeof result.reason === "string" ? result.reason : "Unknown error";
+      failures.push(`${PINNED_ALBUM_QUERIES[index]} => ${reason}`);
       console.warn(`Pinned album fetch failed: ${PINNED_ALBUM_QUERIES[index]}`, result.reason);
     }
   });
+
+  if (pinnedAlbums.length === 0) {
+    throw new Error(
+      `Failed to fetch curated albums from Spotify. ${failures.length > 0 ? `Details: ${failures.join(" | ")}` : ""}`
+    );
+  }
 
   const unique = new Map<string, SpotifyAlbum>();
   for (const pinnedAlbum of pinnedAlbums) {

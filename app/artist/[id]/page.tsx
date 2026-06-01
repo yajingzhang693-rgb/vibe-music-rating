@@ -1,9 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getSpotifyArtist, getSpotifyArtistAlbums, searchAlbums } from "@/lib/spotify";
+import { searchAlbums } from "@/lib/spotify";
 import { ArtistAlbumRow } from "@/components/artist-album-row";
-import { readCachedArtistAlbums, writeCachedArtistAlbums } from "@/lib/artist-cache";
-import { readCachedArtistProfile, writeCachedArtistProfile } from "@/lib/artist-profile-cache";
+import { getArtistPageCacheFirst } from "@/lib/supabase-cache";
 
 type Props = {
   params: { id: string };
@@ -14,29 +13,23 @@ function sortAlbumsByDateDesc<T extends { release_date: string }>(albums: T[]) {
 }
 
 export default async function ArtistPage({ params }: Props) {
-  const canPersistCache = process.env.VERCEL !== "1";
-  let artist: Awaited<ReturnType<typeof getSpotifyArtist>> | null = null;
-  let artistAlbums: Awaited<ReturnType<typeof getSpotifyArtistAlbums>> = [];
+  let artist: Awaited<ReturnType<typeof getArtistPageCacheFirst>>["artist"] | null = null;
+  let artistAlbums: Awaited<ReturnType<typeof getArtistPageCacheFirst>>["albums"] = [];
   let artistError: string | null = null;
   let albumsError: string | null = null;
   let albumsStaleAt: string | null = null;
 
-  const cachedArtist = await readCachedArtistProfile(params.id);
-  if (cachedArtist) {
-    artist = cachedArtist.artist;
-  } else {
-    try {
-      artist = await getSpotifyArtist(params.id);
-      if (canPersistCache) {
-        await writeCachedArtistProfile(params.id, artist);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      if (message.includes("Spotify API error: 404")) {
-        return notFound();
-      }
-      artistError = message;
+  try {
+    const data = await getArtistPageCacheFirst(params.id);
+    artist = data.artist;
+    artistAlbums = sortAlbumsByDateDesc(data.albums);
+    albumsStaleAt = data.staleUpdatedAt;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    if (message.includes("Spotify API error: 404")) {
+      return notFound();
     }
+    artistError = message;
   }
 
   if (!artist) {
@@ -59,43 +52,17 @@ export default async function ArtistPage({ params }: Props) {
     );
   }
 
-  const cachedAlbums = await readCachedArtistAlbums(params.id);
-  if (cachedAlbums) {
-    artistAlbums = sortAlbumsByDateDesc(cachedAlbums.albums);
-    albumsStaleAt = cachedAlbums.updatedAt;
-  } else {
+  if (!artistAlbums.length) {
     try {
-      artistAlbums = await getSpotifyArtistAlbums(params.id);
-      artistAlbums = sortAlbumsByDateDesc(artistAlbums);
-      if (canPersistCache) {
-        await writeCachedArtistAlbums(params.id, artistAlbums);
+      const searched = await searchAlbums(`artist:${artist.name}`, 30);
+      const matched = searched.filter((album) => album.artists.some((a) => a.id === params.id));
+      if (matched.length > 0) {
+        artistAlbums = sortAlbumsByDateDesc(matched);
+      } else {
+        albumsError = "No albums found";
       }
     } catch (error) {
       albumsError = error instanceof Error ? error.message : "Unknown error";
-      // Fallback #1: search albums by artist name.
-      try {
-        const searched = await searchAlbums(`artist:${artist.name}`, 16);
-        const matched = searched.filter((album) => album.artists.some((a) => a.id === params.id));
-        if (matched.length > 0) {
-          artistAlbums = sortAlbumsByDateDesc(matched);
-          if (canPersistCache) {
-            await writeCachedArtistAlbums(params.id, artistAlbums);
-          }
-          albumsError = null;
-        }
-      } catch {
-        // Continue to next fallback.
-      }
-
-      // Fallback #2: local cached albums (if any landed mid-request).
-      if (albumsError) {
-        const cached = await readCachedArtistAlbums(params.id);
-        if (cached) {
-          artistAlbums = sortAlbumsByDateDesc(cached.albums);
-          albumsStaleAt = cached.updatedAt;
-          albumsError = null;
-        }
-      }
     }
   }
 
